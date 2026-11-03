@@ -1,3 +1,4 @@
+
 import os
 import asyncio
 
@@ -28,11 +29,11 @@ from .notifications import send_sms
 # ENVIRONMENT
 load_dotenv()
 
+# CREATE DATABASE TABLES
 Base.metadata.create_all(bind=engine)
 
 
 # DATABASE MIGRATION
-# Existing token data will be preserved.
 def migrate_database():
     inspector = inspect(engine)
 
@@ -45,9 +46,9 @@ def migrate_database():
     }
 
     new_columns = {
-        "estimated_call_at": "DATETIME",
-        "confirmation_sms_sent_at": "DATETIME",
-        "reminder_sent_at": "DATETIME"
+        "estimated_call_at": "TIMESTAMP",
+        "confirmation_sms_sent_at": "TIMESTAMP",
+        "reminder_sent_at": "TIMESTAMP"
     }
 
     with engine.begin() as connection:
@@ -68,12 +69,17 @@ app = FastAPI(
 )
 
 
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:5173"
-    ).split(","),
+    allow_origins=[
+        origin.strip()
+        for origin in os.getenv(
+            "CORS_ORIGINS",
+            "http://localhost:5173"
+        ).split(",")
+        if origin.strip()
+    ],
     allow_methods=["*"],
     allow_headers=["*"]
 )
@@ -81,7 +87,6 @@ app.add_middleware(
 
 # WEBSOCKET CLIENTS
 clients = []
-
 
 # BACKGROUND REMINDER TASK
 reminder_task = None
@@ -132,7 +137,6 @@ def format_sms_time(value):
     if not value:
         return "Not available"
 
-    # Database time is stored as UTC.
     utc_time = value.replace(tzinfo=ZoneInfo("UTC"))
 
     dhaka_time = utc_time.astimezone(
@@ -179,8 +183,6 @@ def recalculate_queue_estimates(db, counter_id=None):
 
         cursor = now
 
-        # If a patient is already being served,
-        # estimate their remaining time using average service time.
         if serving_tokens:
             current = serving_tokens[0]
 
@@ -195,7 +197,6 @@ def recalculate_queue_estimates(db, counter_id=None):
                     )
                 )
 
-        # Estimate each waiting patient's call time.
         for token in waiting_tokens:
 
             token.estimated_call_at = cursor
@@ -363,7 +364,6 @@ def process_reminders():
     try:
         now = datetime.utcnow()
 
-        # Refresh estimated call times.
         recalculate_queue_estimates(db)
 
         waiting_tokens = db.query(Token).filter(
@@ -380,9 +380,6 @@ def process_reminders():
             if not eta:
                 continue
 
-            # Send reminder when estimated call time
-            # is within the next 10 minutes.
-            # Do not send if estimated time has already passed.
             if now < eta <= now + timedelta(minutes=10):
 
                 service = db.get(Service, token.service_id)
@@ -401,7 +398,6 @@ def process_reminders():
 
                 result = send_sms(token.phone, message)
 
-                # Mark as sent only after provider confirms success.
                 if result and result.get("sent") is True:
                     token.reminder_sent_at = datetime.utcnow()
 
@@ -541,7 +537,6 @@ async def book(
     db.add(token)
     db.flush()
 
-    # Calculate queue ETA after booking.
     recalculate_queue_estimates(
         db,
         counter_id=counter.id
@@ -552,7 +547,6 @@ async def book(
 
     result = payload(db, token)
 
-    # Confirmation SMS
     eta_text = format_sms_time(token.estimated_call_at)
 
     confirmation_message = (
